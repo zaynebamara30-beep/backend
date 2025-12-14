@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 const { Pool } = require("pg");
@@ -7,10 +9,9 @@ const QRCode = require("qrcode");
 const app = express();
 
 // ---------------- CORS ----------------
-// Allow all origins for now (including Ngrok)
 app.use(cors({
   origin: "*",
-  methods: ["GET","POST","PUT","DELETE"],
+  methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"]
 }));
 
@@ -18,15 +19,16 @@ app.use(express.json());
 
 // ---------------- POSTGRESQL ----------------
 const pool = new Pool({
-  user: "postgres",
-  host: "localhost",
-  database: "chaher",
-  password: "0405",
-  port: 5432,
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  port: process.env.DB_PORT,
+  ssl: process.env.DB_SSL === "true" ? { rejectUnauthorized: false } : false,
 });
 
 // ---------------- JWT SECRET ----------------
-const JWT_SECRET = "your_super_secret_key";
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // ---------------- ROOT ----------------
 app.get("/", (req, res) => {
@@ -74,9 +76,12 @@ function authenticateToken(req, res, next) {
 
 // ---------------- GET MEMBER BY ID (PUBLIC) ----------------
 app.get("/members/:id", async (req, res) => {
-  const { id } = req.params;
   try {
-    const result = await pool.query("SELECT * FROM members WHERE id = $1", [id]);
+    const result = await pool.query(
+      "SELECT * FROM members WHERE id = $1",
+      [req.params.id]
+    );
+
     if (result.rows.length === 0)
       return res.status(404).json({ message: "Member not found" });
 
@@ -87,16 +92,17 @@ app.get("/members/:id", async (req, res) => {
   }
 });
 
-
 // ---------------- REGISTER MEMBER ----------------
 app.post("/register-member", authenticateToken, async (req, res) => {
   const { name, group_id, code, email } = req.body;
   if (!name || !group_id || !code || !email)
-    return res.status(400).json({ message: "Name, group_id, code, and email are required" });
+    return res.status(400).json({ message: "Missing required fields" });
 
   try {
     const result = await pool.query(
-      "INSERT INTO members (name, group_id, code, email, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING *",
+      `INSERT INTO members (name, group_id, code, email, created_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       RETURNING *`,
       [name, group_id, code, email]
     );
 
@@ -110,7 +116,10 @@ app.post("/register-member", authenticateToken, async (req, res) => {
     });
 
     const qrCodeUrl = await QRCode.toDataURL(qrData);
-    await pool.query("UPDATE members SET qr_code = $1 WHERE id = $2", [qrCodeUrl, member.id]);
+    await pool.query(
+      "UPDATE members SET qr_code = $1 WHERE id = $2",
+      [qrCodeUrl, member.id]
+    );
 
     res.json({ message: "Member registered ✅", member: { ...member, qr_code: qrCodeUrl } });
   } catch (err) {
@@ -119,19 +128,18 @@ app.post("/register-member", authenticateToken, async (req, res) => {
   }
 });
 
-// ---------------- GENERATE ALL QR CODES ----------------
-// ---------------- GENERATE ALL QR CODES ----------------
+// ---------------- GENERATE ALL QR ----------------
 app.post("/generate-all-qr", async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM members");
-    for (let member of result.rows) {
+
+    for (const member of result.rows) {
       if (member.qr_code) continue;
 
-      // Include access field in QR code
       const qrData = JSON.stringify({
         id: member.id,
         name: member.name,
-        access: member.access || false, // default false if null
+        access: member.access || false,
         group_id: member.group_id,
         code: member.code,
         created_at: member.created_at,
@@ -151,12 +159,6 @@ app.post("/generate-all-qr", async (req, res) => {
   }
 });
 
-
-// ---------------- CATCH ALL 404 ----------------
-app.use((req, res) => {
-  res.status(404).json({ message: "Route not found ⚠️" });
-});
-
 // ---------------- START SERVER ----------------
-const PORT = 4000;
+const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
