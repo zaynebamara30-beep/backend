@@ -7,4 +7,4 @@ lt --port 4000 --subdomain mybackend
  lt --port 3000 --subdomain myfrontend
 your url is: https://myfrontend.loca.lt
 
-q
+https://backend-jkhs.vercel.app/admin
