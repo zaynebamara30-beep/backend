@@ -5,24 +5,20 @@ import QRCode from "qrcode";
 import { supabase } from "./supabaseClient.js";
 
 const app = express();
-
-/* ---------------- MIDDLEWARE ---------------- */
 app.use(cors());
 app.use(express.json());
 
-/* ---------------- JWT ---------------- */
 const JWT_SECRET = process.env.JWT_SECRET || "secret_key";
 
-/* ---------------- ROOT ---------------- */
+// Root test
 app.get("/", (req, res) => {
   res.json({ message: "Backend ✅" });
 });
 
-/* ---------------- LOGIN ---------------- */
+// Login
 app.post("/login", async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password)
-    return res.status(400).json({ message: "Missing credentials" });
+  if (!email || !password) return res.status(400).json({ message: "Missing credentials" });
 
   try {
     const { data: users, error } = await supabase
@@ -33,16 +29,10 @@ app.post("/login", async (req, res) => {
       .limit(1);
 
     if (error) throw error;
-    if (!users || users.length === 0)
-      return res.status(401).json({ message: "Invalid login" });
+    if (!users || users.length === 0) return res.status(401).json({ message: "Invalid login" });
 
     const user = users[0];
-    const token = jwt.sign(
-      { id: user.id, name: user.name, role: user.role },
-      JWT_SECRET,
-      { expiresIn: "1h" }
-    );
-
+    const token = jwt.sign({ id: user.id, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: "1h" });
     res.json({ user, token });
   } catch (err) {
     console.error(err);
@@ -50,7 +40,7 @@ app.post("/login", async (req, res) => {
   }
 });
 
-/* ---------------- AUTH MIDDLEWARE ---------------- */
+// Middleware for JWT
 export function authenticateToken(req, res, next) {
   const auth = req.headers["authorization"];
   const token = auth && auth.split(" ")[1];
@@ -63,14 +53,12 @@ export function authenticateToken(req, res, next) {
   });
 }
 
-/* ---------------- MEMBERS ---------------- */
+// Members
 app.get("/members", async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from("members")
+    const { data, error } = await supabase.from("members")
       .select("id, name, group_id, has_access_today, qr_code, entered")
       .order("id");
-
     if (error) throw error;
     res.json(data);
   } catch {
@@ -78,20 +66,19 @@ app.get("/members", async (req, res) => {
   }
 });
 
+// Member enter
 app.post("/members/:id/enter", async (req, res) => {
   const id = Number(req.params.id);
   if (isNaN(id)) return res.status(400).json({ message: "Invalid id" });
 
   try {
-    const { data, error } = await supabase
-      .from("members")
+    const { data, error } = await supabase.from("members")
       .select("has_access_today")
       .eq("id", id)
       .single();
 
     if (error || !data) return res.status(404).json({ message: "Member not found" });
-    if (!data.has_access_today)
-      return res.status(403).json({ message: "No access today" });
+    if (!data.has_access_today) return res.status(403).json({ message: "No access today" });
 
     await supabase.from("members").update({ entered: true }).eq("id", id);
     res.json({ success: true });
@@ -100,60 +87,23 @@ app.post("/members/:id/enter", async (req, res) => {
   }
 });
 
-app.get("/hisenter/:id", async (req, res) => {
-  const id = Number(req.params.id);
-  if (isNaN(id)) return res.status(400).json({ message: "Invalid id" });
-
-  const { data, error } = await supabase
-    .from("members")
-    .select("entered")
-    .eq("id", id)
-    .single();
-
-  if (error) return res.status(404).json({ message: "Member not found" });
-  res.json({ entered: data.entered });
-});
-
-/* ---------------- ACCESS ---------------- */
-app.post("/members/haveAccess/bulk", async (req, res) => {
-  const { memberIds, accessStates } = req.body;
-  if (!Array.isArray(memberIds) || memberIds.length !== accessStates.length)
-    return res.status(400).json({ message: "Invalid data" });
-
-  try {
-    for (let i = 0; i < memberIds.length; i++) {
-      await supabase
-        .from("members")
-        .update({ has_access_today: accessStates[i] })
-        .eq("id", memberIds[i]);
-    }
-    res.json({ success: true });
-  } catch {
-    res.status(500).json({ message: "Bulk update failed" });
-  }
-});
-
-/* ---------------- GROUPS ---------------- */
+// Groups
 app.get("/groups", async (req, res) => {
   try {
     const { data: groups, error } = await supabase.from("groups").select("*");
     if (error) throw error;
 
-    const result = await Promise.all(
-      groups.map(async g => {
-        const { data: members } = await supabase
-          .from("members")
-          .select("has_access_today, entered")
-          .eq("group_id", g.id);
-
-        return {
-          ...g,
-          membersCount: members.length,
-          accessToday: members.filter(m => m.has_access_today).length,
-          entered: members.filter(m => m.entered).length
-        };
-      })
-    );
+    const result = await Promise.all(groups.map(async g => {
+      const { data: members } = await supabase.from("members")
+        .select("has_access_today, entered")
+        .eq("group_id", g.id);
+      return {
+        ...g,
+        membersCount: members.length,
+        accessToday: members.filter(m => m.has_access_today).length,
+        entered: members.filter(m => m.entered).length
+      };
+    }));
 
     res.json(result);
   } catch {
@@ -161,18 +111,16 @@ app.get("/groups", async (req, res) => {
   }
 });
 
-/* ---------------- QR ---------------- */
+// QR generation (careful: serverless timeout)
 app.post("/generate-all-qr", async (req, res) => {
   try {
     const { data: members } = await supabase.from("members").select("*");
     const toGenerate = members.filter(m => !m.qr_code);
 
-    await Promise.all(
-      toGenerate.map(async (m) => {
-        const qr = await QRCode.toDataURL(JSON.stringify({ id: m.id, name: m.name, group_id: m.group_id }));
-        await supabase.from("members").update({ qr_code: qr }).eq("id", m.id);
-      })
-    );
+    await Promise.all(toGenerate.map(async m => {
+      const qr = await QRCode.toDataURL(JSON.stringify({ id: m.id, name: m.name, group_id: m.group_id }));
+      await supabase.from("members").update({ qr_code: qr }).eq("id", m.id);
+    }));
 
     res.json({ message: "QR generated ✅" });
   } catch (err) {
@@ -181,5 +129,5 @@ app.post("/generate-all-qr", async (req, res) => {
   }
 });
 
-/* ---------------- EXPORT ---------------- */
+// Export app for Vercel (do NOT use app.listen)
 export default app;
