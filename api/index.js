@@ -2,11 +2,7 @@ import express from "express";
 import cors from "cors";
 import jwt from "jsonwebtoken";
 import QRCode from "qrcode";
-import dotenv from "dotenv";
 import { supabase } from "./supabaseClient.js";
-
-dotenv.config();
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 const app = express();
 
@@ -19,7 +15,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret_key";
 
 /* ---------------- ROOT ---------------- */
 app.get("/", (req, res) => {
-  res.json({ message: "Backend  ✅" });
+  res.json({ message: "Backend ✅" });
 });
 
 /* ---------------- LOGIN ---------------- */
@@ -55,7 +51,7 @@ app.post("/login", async (req, res) => {
 });
 
 /* ---------------- AUTH MIDDLEWARE ---------------- */
-function authenticateToken(req, res, next) {
+export function authenticateToken(req, res, next) {
   const auth = req.headers["authorization"];
   const token = auth && auth.split(" ")[1];
   if (!token) return res.status(401).json({ message: "No token" });
@@ -166,25 +162,28 @@ app.get("/groups", async (req, res) => {
 });
 
 /* ---------------- QR ---------------- */
+// Generate QR codes in **parallel** to avoid serverless timeout
 app.post("/generate-all-qr", async (req, res) => {
   try {
     const { data: members } = await supabase.from("members").select("*");
 
-    for (const m of members) {
-      if (m.qr_code) continue;
+    // Filter members without QR first
+    const toGenerate = members.filter(m => !m.qr_code);
 
-      const qr = await QRCode.toDataURL(
-        JSON.stringify({ id: m.id, name: m.name, group_id: m.group_id })
-      );
-
-      await supabase.from("members").update({ qr_code: qr }).eq("id", m.id);
-    }
+    // Generate QR codes in parallel using Promise.all
+    await Promise.all(
+      toGenerate.map(async (m) => {
+        const qr = await QRCode.toDataURL(JSON.stringify({ id: m.id, name: m.name, group_id: m.group_id }));
+        await supabase.from("members").update({ qr_code: qr }).eq("id", m.id);
+      })
+    );
 
     res.json({ message: "QR generated ✅" });
-  } catch {
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ message: "QR error" });
   }
 });
 
-/* ---------------- EXPORT (IMPORTANT) ---------------- */
+/* ---------------- EXPORT ---------------- */
 export default app;
